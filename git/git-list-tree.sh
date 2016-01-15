@@ -1,8 +1,29 @@
 #!/bin/bash
 
+#
+# Author:  Ioan Indreias
+# License: MIT, Copyright (c) 2016 Ioan Indreias
+#
+# version: 1 - initial release
+#
+
 # $1 = location for bare git repositories
 
-cd $1
+if [ -z "$1" ]
+then
+  echo "Please provide the location for bare git repositories"
+  exit 1
+else
+  if [ -d "$1" ]
+  then
+    cd $1
+  else
+    echo "Error: could not change directory to '$1'"
+    exit 2
+  fi
+fi
+
+echo "Location: $1"
 find . -maxdepth 1 -type d | while read d
 do
   info=$(git --git-dir="$d" branch 2>&1)
