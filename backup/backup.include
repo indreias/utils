@@ -1,0 +1,144 @@
+
+to_log(){
+  echo -e "$(date '+%Y/%m/%d %T') [$$] $1" | tee -a ${LOG_1} >> ${LOG_2}
+}
+
+
+load_config(){
+  if [ -f "$1" ]
+  then
+    source "$1"
+  else
+    if [ "$2" == "print_error" ]
+    then
+      echo "ERROR: config file '$1' not found"
+    fi
+    return 1
+  fi
+}
+
+
+check_empty(){
+  while [ $# -gt 0 ]
+  do
+    if [ -z "$1" ]
+    then
+      return 1
+    fi
+    shift
+  done
+}
+
+
+process_pid_file(){
+#
+# $1 - process command: continue | pause | stop
+# $2 - PID file to check
+#
+  ret_code=95
+  if [ -s "$2" ]
+  then
+    my_pid=$(cat "$2" | head -n 1)
+    if [ -n "${my_pid}" ]
+    then
+      if [ "${my_pid}" == "pre-sync" ]
+      then
+        ret_code=98
+        info="command '$1' not honored as it seems that another job is in progress (pid: ${my_pid}, code: ${ret_code})"
+      else
+        case "$1" in
+          "pause")    kill -SIGSTOP ${my_pid} 2>/dev/null
+                      ret_code=$?
+                      info="paused";;
+          "stop")     kill ${my_pid} 2>/dev/null
+                      ret_code=$?
+                      info="stopped";;
+          "continue") kill -SIGCONT ${my_pid} 2>/dev/null
+                      ret_code=$?
+                      info="continued";;
+          *)          # A strange situation - we stop now!
+                      ret_code=99
+                      info="command '$1' not currently implemented - nothing to do";;
+        esac
+        if [ $ret_code -gt 0 ]
+        then
+          rm -f "${RSYNC_PID_FILE}"
+          info="command '$1' failed (pid: ${my_pid}, code: ${ret_code}) - PID file removed"
+        fi
+      fi
+    else
+      rm -f "${RSYNC_PID_FILE}"
+      info="command '$1' failed (PID file '$2' with wrong format) - PID file removed"
+    fi
+  else
+    rm -f "${RSYNC_PID_FILE}"
+    info="command '$1' failed (PID file '$2') empty or not accesible - PID file removed"
+  fi
+  echo ${info}
+  return $ret_code
+}
+
+
+server_backup(){
+#
+# rsync incremental backup based on
+# http://www.mikerubel.org/computers/rsync_snapshots/
+#
+    #
+    # Mark that we have started our work
+    echo "pre-sync" > ${RSYNC_PID_FILE}
+
+    #
+    # Create directory structure for the backup
+    mkdir -p $(dirname ${STAT_FILE})
+
+    if [ -f ${STAT_FILE} ]
+    then
+      if [ $(grep -c "finished" ${STAT_FILE}) -eq 1 ]
+      then
+        if [ -d ${LAST_BACKUP} ]
+        then
+          rm -rf ${LAST_BACKUP}
+        fi
+        for i in $(seq ${MAX_BACKUPS} -1 1)
+        do
+          SRC_DIR=${INCREMENTAL_DEST}/backup.$((i-1))
+          DST_DIR=${INCREMENTAL_DEST}/backup.${i}
+          if [ -d ${SRC_DIR} ]
+          then
+            if [ ${i} -gt 1 ]
+            then
+              mv ${SRC_DIR} ${DST_DIR}
+            else
+              cp -al ${SRC_DIR} ${DST_DIR}
+              mv ${STAT_FILE} ${DST_DIR}
+            fi
+          fi
+        done
+      fi
+    fi
+
+    ${RSYNC_CMD} ${RSYNC_OPT} --exclude=/$(basename ${STAT_FILE}) ${RSYNC_SOURCE}/ ${INCREMENTAL_DEST}/backup.0/ 2>>${LOG_2} 1>>/dev/null &
+    rsync_pid=$!
+    echo ${rsync_pid} > ${RSYNC_PID_FILE}
+
+    # SEC: we should protect our PID file
+    chmod 600 ${RSYNC_PID_FILE}
+
+    echo "$(date) started on ${blk_info}" >> ${STAT_FILE}
+
+    wait ${rsync_pid}
+    ret_code=$?
+
+    case ${ret_code} in
+      20)  status="interrupted";;
+      24)  status="finished with several vanished source files";;
+       *)  status="finished";;
+    esac
+
+    status="${status} with code ${ret_code}"
+    rm -f ${RSYNC_PID_FILE}
+    touch ${INCREMENTAL_DEST}/backup.0
+    echo "$(date) $status" >> ${STAT_FILE}
+    echo "$status"
+}
