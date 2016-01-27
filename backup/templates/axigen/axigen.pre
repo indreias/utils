@@ -1,0 +1,22 @@
+#!/bin/bash
+
+if [ $# -eq 0 ]
+then
+  echo "ERROR: please provide the mount point for FUSE"
+  exit 99
+fi
+
+if [ ! -d "$1" ]
+then
+  echo "ERROR: no access to '$1' directory"
+  exit 98
+fi
+
+echo "request to mount '$1'"
+
+/opt/axigen/scripts/axigen-fuseUnMount "$1" 2>&1 1>/dev/null
+
+# force lazy unmount just in case the folder remains mounted
+umount -l "$1" 2>&1 1>/dev/null
+
+/opt/axigen/scripts/axigen-fuseMount "$1" 2>&1 1>/dev/null
